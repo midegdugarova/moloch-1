@@ -1,3 +1,4 @@
+.env
 node_modules/
 build/
 cache/
@@ -11,3 +12,6 @@ coverageEnv/
 scTopics
 .DS_Store
 moloch.iml
+/artifacts-pvm
+/cache-pvm
+/ignition/deployments/

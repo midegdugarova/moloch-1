@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: MIT
 // helper for testing moloch.submitProposal return value
 
-pragma solidity 0.5.3;
+pragma solidity ^0.8.28;
 
 import "../Moloch.sol";
 

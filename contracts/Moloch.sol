@@ -1,11 +1,10 @@
-pragma solidity 0.5.3;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
 
-import "./SafeMath.sol";
 import "./IERC20.sol";
 import "./ReentrancyGuard.sol";
 
 contract Moloch is ReentrancyGuard {
-    using SafeMath for uint256;
 
     /***************
     GLOBAL CONSTANTS
@@ -91,8 +90,9 @@ contract Moloch is ReentrancyGuard {
         bool[6] flags; // [sponsored, processed, didPass, cancelled, whitelist, guildkick]
         string details; // proposal details - could be IPFS hash, plaintext, or JSON
         uint256 maxTotalSharesAndLootAtYesVote; // the maximum # of total shares encountered at a yes vote on this proposal
-        mapping(address => Vote) votesByMember; // the votes on this proposal by each member
     }
+
+    mapping(uint256 => mapping(address => Vote)) votesByMember; // the votes on this proposal by each member
 
     mapping(address => bool) public tokenWhitelist;
     address[] public approvedTokens;
@@ -131,7 +131,7 @@ contract Moloch is ReentrancyGuard {
         uint256 _proposalDeposit,
         uint256 _dilutionBound,
         uint256 _processingReward
-    ) public {
+    ) {
         require(_summoner != address(0), "summoner cannot be 0");
         require(_periodDuration > 0, "_periodDuration cannot be 0");
         require(_votingPeriodLength > 0, "_votingPeriodLength cannot be 0");
@@ -142,10 +142,10 @@ contract Moloch is ReentrancyGuard {
         require(_approvedTokens.length > 0, "need at least one approved token");
         require(_approvedTokens.length <= MAX_TOKEN_WHITELIST_COUNT, "too many tokens");
         require(_proposalDeposit >= _processingReward, "_proposalDeposit cannot be smaller than _processingReward");
-        
+
         depositToken = _approvedTokens[0];
         // NOTE: move event up here, avoid stack too deep if too many approved tokens
-        emit SummonComplete(_summoner, _approvedTokens, now, _periodDuration, _votingPeriodLength, _gracePeriodLength, _proposalDeposit, _dilutionBound, _processingReward);
+        emit SummonComplete(_summoner, _approvedTokens, block.timestamp, _periodDuration, _votingPeriodLength, _gracePeriodLength, _proposalDeposit, _dilutionBound, _processingReward);
 
 
         for (uint256 i = 0; i < _approvedTokens.length; i++) {
@@ -162,12 +162,12 @@ contract Moloch is ReentrancyGuard {
         dilutionBound = _dilutionBound;
         processingReward = _processingReward;
 
-        summoningTime = now;
+        summoningTime = block.timestamp;
 
         members[_summoner] = Member(_summoner, 1, 0, true, 0, 0);
         memberAddressByDelegateKey[_summoner] = _summoner;
         totalShares = 1;
-       
+
     }
 
     /*****************
@@ -183,7 +183,7 @@ contract Moloch is ReentrancyGuard {
         address paymentToken,
         string memory details
     ) public nonReentrant returns (uint256 proposalId) {
-        require(sharesRequested.add(lootRequested) <= MAX_NUMBER_OF_SHARES_AND_LOOT, "too many shares requested");
+        require(sharesRequested + lootRequested <= MAX_NUMBER_OF_SHARES_AND_LOOT, "too many shares requested");
         require(tokenWhitelist[tributeToken], "tributeToken is not whitelisted");
         require(tokenWhitelist[paymentToken], "payment is not whitelisted");
         require(applicant != address(0), "applicant cannot be 0");
@@ -297,8 +297,8 @@ contract Moloch is ReentrancyGuard {
         // compute startingPeriod for proposal
         uint256 startingPeriod = max(
             getCurrentPeriod(),
-            proposalQueue.length == 0 ? 0 : proposals[proposalQueue[proposalQueue.length.sub(1)]].startingPeriod
-        ).add(1);
+            proposalQueue.length == 0 ? 0 : proposals[proposalQueue[proposalQueue.length - 1]].startingPeriod
+        ) + 1;
 
         proposal.startingPeriod = startingPeriod;
 
@@ -309,8 +309,8 @@ contract Moloch is ReentrancyGuard {
 
         // append proposal to the queue
         proposalQueue.push(proposalId);
-        
-        emit SponsorProposal(msg.sender, memberAddress, proposalId, proposalQueue.length.sub(1), startingPeriod);
+
+        emit SponsorProposal(msg.sender, memberAddress, proposalId, proposalQueue.length - 1, startingPeriod);
     }
 
     // NOTE: In MolochV2 proposalIndex !== proposalId
@@ -326,13 +326,13 @@ contract Moloch is ReentrancyGuard {
 
         require(getCurrentPeriod() >= proposal.startingPeriod, "voting period has not started");
         require(!hasVotingPeriodExpired(proposal.startingPeriod), "proposal voting period has expired");
-        require(proposal.votesByMember[memberAddress] == Vote.Null, "member has already voted");
+        require(votesByMember[proposalQueue[proposalIndex]][memberAddress] == Vote.Null, "member has already voted");
         require(vote == Vote.Yes || vote == Vote.No, "vote must be either Yes or No");
 
-        proposal.votesByMember[memberAddress] = vote;
+        votesByMember[proposalQueue[proposalIndex]][memberAddress] = vote;
 
         if (vote == Vote.Yes) {
-            proposal.yesVotes = proposal.yesVotes.add(member.shares);
+            proposal.yesVotes = proposal.yesVotes + member.shares;
 
             // set highest index (latest) yes vote - must be processed for member to ragequit
             if (proposalIndex > member.highestIndexYesVote) {
@@ -340,14 +340,14 @@ contract Moloch is ReentrancyGuard {
             }
 
             // set maximum of total shares encountered at a yes vote - used to bound dilution for yes voters
-            if (totalShares.add(totalLoot) > proposal.maxTotalSharesAndLootAtYesVote) {
-                proposal.maxTotalSharesAndLootAtYesVote = totalShares.add(totalLoot);
+            if (totalShares + totalLoot > proposal.maxTotalSharesAndLootAtYesVote) {
+                proposal.maxTotalSharesAndLootAtYesVote = totalShares + totalLoot;
             }
 
         } else if (vote == Vote.No) {
-            proposal.noVotes = proposal.noVotes.add(member.shares);
+            proposal.noVotes = proposal.noVotes + member.shares;
         }
-     
+
         // NOTE: subgraph indexes by proposalId not proposalIndex since proposalIndex isn't set untill it's been sponsored but proposal is created on submission
         emit SubmitVote(proposalQueue[proposalIndex], proposalIndex, msg.sender, memberAddress, uintVote);
     }
@@ -365,7 +365,7 @@ contract Moloch is ReentrancyGuard {
         bool didPass = _didPass(proposalIndex);
 
         // Make the proposal fail if the new total number of shares and loot exceeds the limit
-        if (totalShares.add(totalLoot).add(proposal.sharesRequested).add(proposal.lootRequested) > MAX_NUMBER_OF_SHARES_AND_LOOT) {
+        if ((totalShares + totalLoot + proposal.sharesRequested + proposal.lootRequested) > MAX_NUMBER_OF_SHARES_AND_LOOT) {
             didPass = false;
         }
 
@@ -385,8 +385,8 @@ contract Moloch is ReentrancyGuard {
 
             // if the applicant is already a member, add to their existing shares & loot
             if (members[proposal.applicant].exists) {
-                members[proposal.applicant].shares = members[proposal.applicant].shares.add(proposal.sharesRequested);
-                members[proposal.applicant].loot = members[proposal.applicant].loot.add(proposal.lootRequested);
+                members[proposal.applicant].shares = members[proposal.applicant].shares + proposal.sharesRequested;
+                members[proposal.applicant].loot = members[proposal.applicant].loot + proposal.lootRequested;
 
             // the applicant is a new member, create a new record for them
             } else {
@@ -403,8 +403,8 @@ contract Moloch is ReentrancyGuard {
             }
 
             // mint new shares & loot
-            totalShares = totalShares.add(proposal.sharesRequested);
-            totalLoot = totalLoot.add(proposal.lootRequested);
+            totalShares = totalShares + proposal.sharesRequested;
+            totalLoot = totalLoot + proposal.lootRequested;
 
             // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
             if (userTokenBalances[GUILD][proposal.tributeToken] == 0 && proposal.tributeOffered > 0) {
@@ -478,9 +478,9 @@ contract Moloch is ReentrancyGuard {
             member.jailed = proposalIndex;
 
             // transfer shares to loot
-            member.loot = member.loot.add(member.shares);
-            totalShares = totalShares.sub(member.shares);
-            totalLoot = totalLoot.add(member.shares);
+            member.loot = member.loot + member.shares;
+            totalShares = totalShares + member.shares;
+            totalLoot = totalLoot + member.shares;
             member.shares = 0; // revoke all shares
         }
 
@@ -491,13 +491,13 @@ contract Moloch is ReentrancyGuard {
         emit ProcessGuildKickProposal(proposalIndex, proposalId, didPass);
     }
 
-    function _didPass(uint256 proposalIndex) internal returns (bool didPass) {
+    function _didPass(uint256 proposalIndex) internal view returns (bool didPass) {
         Proposal memory proposal = proposals[proposalQueue[proposalIndex]];
 
         didPass = proposal.yesVotes > proposal.noVotes;
 
         // Make the proposal fail if the dilutionBound is exceeded
-        if ((totalShares.add(totalLoot)).mul(dilutionBound) < proposal.maxTotalSharesAndLootAtYesVote) {
+        if (((totalShares + totalLoot) * dilutionBound) < proposal.maxTotalSharesAndLootAtYesVote) {
             didPass = false;
         }
 
@@ -515,14 +515,14 @@ contract Moloch is ReentrancyGuard {
         require(proposalIndex < proposalQueue.length, "proposal does not exist");
         Proposal memory proposal = proposals[proposalQueue[proposalIndex]];
 
-        require(getCurrentPeriod() >= proposal.startingPeriod.add(votingPeriodLength).add(gracePeriodLength), "proposal is not ready to be processed");
+        require(getCurrentPeriod() >= proposal.startingPeriod + votingPeriodLength + gracePeriodLength, "proposal is not ready to be processed");
         require(proposal.flags[1] == false, "proposal has already been processed");
-        require(proposalIndex == 0 || proposals[proposalQueue[proposalIndex.sub(1)]].flags[1], "previous proposal must be processed");
+        require(proposalIndex == 0 || proposals[proposalQueue[proposalIndex - 1]].flags[1], "previous proposal must be processed");
     }
 
     function _returnDeposit(address sponsor) internal {
         unsafeInternalTransfer(ESCROW, msg.sender, depositToken, processingReward);
-        unsafeInternalTransfer(ESCROW, sponsor, depositToken, proposalDeposit.sub(processingReward));
+        unsafeInternalTransfer(ESCROW, sponsor, depositToken, proposalDeposit - processingReward);
     }
 
     function ragequit(uint256 sharesToBurn, uint256 lootToBurn) public nonReentrant onlyMember {
@@ -530,7 +530,7 @@ contract Moloch is ReentrancyGuard {
     }
 
     function _ragequit(address memberAddress, uint256 sharesToBurn, uint256 lootToBurn) internal {
-        uint256 initialTotalSharesAndLoot = totalShares.add(totalLoot);
+        uint256 initialTotalSharesAndLoot = totalShares + totalLoot;
 
         Member storage member = members[memberAddress];
 
@@ -539,13 +539,13 @@ contract Moloch is ReentrancyGuard {
 
         require(canRagequit(member.highestIndexYesVote), "cannot ragequit until highest index proposal member voted YES on is processed");
 
-        uint256 sharesAndLootToBurn = sharesToBurn.add(lootToBurn);
+        uint256 sharesAndLootToBurn = sharesToBurn + lootToBurn;
 
         // burn shares and loot
-        member.shares = member.shares.sub(sharesToBurn);
-        member.loot = member.loot.sub(lootToBurn);
-        totalShares = totalShares.sub(sharesToBurn);
-        totalLoot = totalLoot.sub(lootToBurn);
+        member.shares = member.shares - sharesToBurn;
+        member.loot = member.loot - lootToBurn;
+        totalShares = totalShares - sharesToBurn;
+        totalLoot = totalLoot - lootToBurn;
 
         for (uint256 i = 0; i < approvedTokens.length; i++) {
             uint256 amountToRagequit = fairShare(userTokenBalances[GUILD][approvedTokens[i]], sharesAndLootToBurn, initialTotalSharesAndLoot);
@@ -574,19 +574,19 @@ contract Moloch is ReentrancyGuard {
         _withdrawBalance(token, amount);
     }
 
-    function withdrawBalances(address[] memory tokens, uint256[] memory amounts, bool max) public nonReentrant {
+    function withdrawBalances(address[] memory tokens, uint256[] memory amounts, bool maxAmount) public nonReentrant {
         require(tokens.length == amounts.length, "tokens and amounts arrays must be matching lengths");
 
         for (uint256 i=0; i < tokens.length; i++) {
             uint256 withdrawAmount = amounts[i];
-            if (max) { // withdraw the maximum balance
+            if (maxAmount) { // withdraw the maximum balance
                 withdrawAmount = userTokenBalances[msg.sender][tokens[i]];
             }
 
             _withdrawBalance(tokens[i], withdrawAmount);
         }
     }
-    
+
     function _withdrawBalance(address token, uint256 amount) internal {
         require(userTokenBalances[msg.sender][token] >= amount, "insufficient balance");
         unsafeSubtractFromBalance(msg.sender, token, amount);
@@ -595,12 +595,12 @@ contract Moloch is ReentrancyGuard {
     }
 
     function collectTokens(address token) public onlyDelegate nonReentrant {
-        uint256 amountToCollect = IERC20(token).balanceOf(address(this)).sub(userTokenBalances[TOTAL][token]);
+        uint256 amountToCollect = IERC20(token).balanceOf(address(this)) - userTokenBalances[TOTAL][token];
         // only collect if 1) there are tokens to collect 2) token is whitelisted 3) token has non-zero balance
         require(amountToCollect > 0, 'no tokens to collect');
         require(tokenWhitelist[token], 'token to collect must be whitelisted');
         require(userTokenBalances[GUILD][token] > 0, 'token to collect must have non-zero guild bank balance');
-        
+
         unsafeAddToBalance(GUILD, token, amountToCollect);
         emit TokensCollected(token, amountToCollect);
     }
@@ -613,7 +613,7 @@ contract Moloch is ReentrancyGuard {
         require(msg.sender == proposal.proposer, "solely the proposer can cancel");
 
         proposal.flags[3] = true; // cancelled
-        
+
         unsafeInternalTransfer(ESCROW, proposal.proposer, proposal.tributeToken, proposal.tributeOffered);
         emit CancelProposal(proposalId, msg.sender);
     }
@@ -642,7 +642,7 @@ contract Moloch is ReentrancyGuard {
     }
 
     function hasVotingPeriodExpired(uint256 startingPeriod) public view returns (bool) {
-        return getCurrentPeriod() >= startingPeriod.add(votingPeriodLength);
+        return getCurrentPeriod() >= startingPeriod + votingPeriodLength;
     }
 
     /***************
@@ -654,7 +654,7 @@ contract Moloch is ReentrancyGuard {
     }
 
     function getCurrentPeriod() public view returns (uint256) {
-        return now.sub(summoningTime).div(periodDuration);
+        return (block.timestamp - summoningTime) / periodDuration;
     }
 
     function getProposalQueueLength() public view returns (uint256) {
@@ -672,7 +672,7 @@ contract Moloch is ReentrancyGuard {
     function getMemberProposalVote(address memberAddress, uint256 proposalIndex) public view returns (Vote) {
         require(members[memberAddress].exists, "member does not exist");
         require(proposalIndex < proposalQueue.length, "proposal does not exist");
-        return proposals[proposalQueue[proposalIndex]].votesByMember[memberAddress];
+        return votesByMember[proposalQueue[proposalIndex]][memberAddress];
     }
 
     function getTokenCount() public view returns (uint256) {
@@ -697,17 +697,17 @@ contract Moloch is ReentrancyGuard {
         unsafeAddToBalance(to, token, amount);
     }
 
-    function fairShare(uint256 balance, uint256 shares, uint256 totalShares) internal pure returns (uint256) {
-        require(totalShares != 0);
+    function fairShare(uint256 balance, uint256 shares, uint256 allShares) internal pure returns (uint256) {
+        require(allShares != 0);
 
         if (balance == 0) { return 0; }
 
         uint256 prod = balance * shares;
 
         if (prod / balance == shares) { // no overflow in multiplication above?
-            return prod / totalShares;
+            return prod / allShares;
         }
 
-        return (balance / totalShares) * shares;
+        return (balance / allShares) * shares;
     }
 }
