@@ -29,7 +29,18 @@ Solidity 0.8+ includes built-in overflow checks, so external SafeMath library wa
 
   Updated Solidity version in Hardhat config
 
+## Deployment
 
+To deploy the DAO on Westend run
+
+`npm init -y`
+`npm install --save-dev hardhat @nomicfoundation/hardhat-toolbox`
+`npm install --save-dev hardhat-resolc@0.0.7 hardhat-revive-node@0.0.6 dotenv`
+
+Create a .env file in your project root to store your private key.
+
+Run
+`npx hardhat ignition deploy ./ignition/modules/Moloch.js --network westendHub`
 
 # Moloch v2
 ![Worship Moloch](https://cdn.discordapp.com/attachments/583914506389028865/641047975421804584/2019-11-04_14.55.39.jpg)
