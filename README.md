@@ -1,11 +1,13 @@
+# Moloch DAO on Polkadot
 This repository is a test deployment of the original Moloch DAO smart contracts onto the Polkadot Hub using Solidity 0.8 and Hardhat.
-
 
 This is an experimental adaptation of the Moloch DAO codebase to:
 
 Upgrade Solidity from 0.5.x to Solidity 0.8.x
 
 Test EVM contract compatibility and deployment flows on the Polkadot Hub
+
+The DAO contract has been sussessfully compiled and deployed on Westend. 
 
 ## Changes Made
 To make the original Moloch DAO contracts compatible with Solidity 0.8, the following updates were made:
